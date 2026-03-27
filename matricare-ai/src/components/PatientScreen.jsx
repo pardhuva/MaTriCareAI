@@ -1,7 +1,7 @@
 // components/PatientScreen.js
 import { useState } from 'react';
 
-function PatientScreen({ language, setRole, setHospitalAlerts }) {
+function PatientScreen({ language, setRole, setHospitalAlerts, setPendingPatients }) {
   const [step, setStep] = useState(0);                    // 0 = Profile, 1-5 = Questions
   const [profile, setProfile] = useState({
     name: "",
@@ -80,12 +80,10 @@ function PatientScreen({ language, setRole, setHospitalAlerts }) {
   const calculateRisk = (patientProfile, symptomList) => {
     let score = 0;
 
-    // 1. Age Factor
     const age = parseInt(patientProfile.age) || 25;
     if (age < 18 || age > 35) score += 30;           // Very high risk
     else if (age < 20 || age > 32) score += 15;      // Moderate risk
 
-    // 2. Region Factor
     const regionRisk = {
       "Region A": 10,
       "Region B": 15,
@@ -94,31 +92,34 @@ function PatientScreen({ language, setRole, setHospitalAlerts }) {
     };
     score += regionRisk[patientProfile.region] || 10;
 
-    // 3. Symptom Keyword Analysis (Simulated NLP)
-    const allText = symptomList.map(s => s.answer.toLowerCase()).join(" ");
+    // 🔥 FIXED LOGIC
+    symptomList.forEach((symptom, index) => {
+      const answer = symptom.answer.toLowerCase();
 
-    const criticalKeywords = ['bleeding', 'blood', 'severe', 'unbearable', 'heavy bleeding', 'fainting', 'unconscious', 'blurred vision', 'convulsion', 'extreme'];
-    const seriousKeywords = ['pain', 'swelling', 'dizzy', 'dizziness', 'headache', 'fatigue', 'spotting', 'vomiting', 'tired'];
+      // YES detection
+      if (answer.includes("yes") || answer.includes("ha") || answer.includes("yes i have")) {
+        
+        // Assign weight based on question
+        if (index === 0) score += 40; // bleeding
+        else if (index === 1) score += 30; // stomach pain
+        else if (index === 2) score += 25; // swelling
+        else if (index === 3) score += 35; // headache/vision
+        else if (index === 4) score += 20; // fatigue
+      }
 
-    criticalKeywords.forEach(word => {
-      if (allText.includes(word)) score += 35;
+      // Extra keyword detection
+      if (answer.includes("bleeding") || answer.includes("blood")) score += 40;
+      if (answer.includes("severe") || answer.includes("extreme")) score += 30;
+      if (answer.includes("dizzy") || answer.includes("faint")) score += 25;
     });
 
-    seriousKeywords.forEach(word => {
-      if (allText.includes(word)) score += 18;
-    });
-
-    // 4. Number of symptoms reported
-    if (symptomList.length >= 4) score += 20;
-
-    // Final Risk Level
     let riskLevel = "Low";
     let riskColor = "bg-green-600";
 
-    if (score >= 85) {
+    if (score >= 80) {
       riskLevel = "High";
       riskColor = "bg-red-600";
-    } else if (score >= 55) {
+    } else if (score >= 50) {
       riskLevel = "Medium";
       riskColor = "bg-orange-600";
     }
@@ -126,43 +127,175 @@ function PatientScreen({ language, setRole, setHospitalAlerts }) {
     return { riskLevel, riskColor, score };
   };
 
+  // 🔥 Convert symptoms → ML features
+  const mapSymptomsToFeatures = (symptomsText) => {
+    let bp = 120, dbp = 80, bs = 7, temp = 98, hr = 75;
+
+    const text = symptomsText.toLowerCase().trim();
+
+    // 🔥 NEGATIVE WORDS (simple check)
+    const negativeWords = ["no", "not", "dont", "don't", "nothing", "fine", "doesn't", "doesnt"];
+
+    // 👉 If ONLY negative response → return normal
+    if (negativeWords.includes(text)) {
+      return { bp, dbp, bs, temp, hr };
+    }
+
+    // 🚨 BLEEDING (highest priority)
+    if (text.includes("bleeding")) {
+      bp += 30;
+      hr += 10;
+    }
+
+    // Severe pain
+    if (text.includes("pain")) {
+      bp += 20;
+    }
+
+    // Swelling
+    if (text.includes("swelling")) {
+      bp += 15;
+    }
+
+    // Headache / vision
+    if (text.includes("headache") || text.includes("vision")) {
+      bp += 20;
+    }
+
+    // Dizziness
+    if (text.includes("dizzy")) {
+      bp -= 10;
+      hr += 10;
+    }
+
+    // Fatigue
+    if (text.includes("fatigue")) {
+      hr += 10;
+    }
+
+    // Fever
+    if (text.includes("fever")) {
+      temp += 2;
+    }
+
+    return { bp, dbp, bs, temp, hr };
+  };
+
+  // 🔥 Call ML API
+  const getMLRisk = async (profile, symptomsList) => {
+    const text = symptomsList.map(s => s.answer).join(" ");
+
+    const features = mapSymptomsToFeatures(text);
+
+    const res = await fetch("http://127.0.0.1:5000/predict", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        age: parseInt(profile.age),
+        ...features
+      })
+    });
+
+    const data = await res.json();
+    const risk = data.risk;
+    const confidence = data.confidence;
+    return { risk, confidence };
+  };
+
   const finishAssessment = async (allSymptoms) => {
     setLoading(true);
 
-    // Simulate processing time
-    await new Promise(resolve => setTimeout(resolve, 1400));
+    try {
+      await new Promise(resolve => setTimeout(resolve, 800)); // simulate delay
 
-    const { riskLevel, riskColor } = calculateRisk(profile, allSymptoms);
+      let mlRisk = "Medium";
+      let confidence = 0.75;
 
-    const finalResult = {
-      riskLevel,
-      riskColor,
-      message: riskLevel === "High" 
-        ? "High Risk detected. Hospital has been alerted immediately." 
-        : riskLevel === "Medium" 
-        ? "Medium Risk. ASHA worker will contact you soon." 
-        : "Low risk. Regular check-up is recommended.",
-      hospitalAlert: riskLevel === "High",
-      patientProfile: profile,
-      symptoms: allSymptoms,
-      calculatedScore: calculateRisk(profile, allSymptoms).score
-    };
+      try {
+        const text = allSymptoms.map(s => s.answer).join(" ");
+        const features = mapSymptomsToFeatures(text);
 
-    setResult(finalResult);
+        const res = await fetch("http://127.0.0.1:5000/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            age: parseInt(profile.age) || 25,
+            ...features
+          })
+        });
 
-    // Send High Risk alert to Hospital
-    if (finalResult.hospitalAlert) {
-      setHospitalAlerts(prev => [...prev, {
+        if (!res.ok) throw new Error("ML server error");
+
+        const data = await res.json();
+        mlRisk = data.risk || "Medium";
+        confidence = data.confidence || 0.7;
+      } catch (mlError) {
+        console.warn("ML backend not available, using rule-based risk:", mlError);
+        const ruleResult = calculateRisk(profile, allSymptoms.map(s => ({ answer: s.answer })));
+        mlRisk = ruleResult.riskLevel;
+      }
+
+      const text = allSymptoms.map(s => s.answer).join(" ").toLowerCase();
+      const negativeWords = ["no", "nothing", "fine", "dont", "not"];
+      const isMostlyNegative = negativeWords.some(word => text.includes(word));
+
+      let finalRisk = (isMostlyNegative && confidence < 0.7) ? "Low" : mlRisk;
+
+      const riskColor = finalRisk === "High" ? "bg-red-600" 
+                    : finalRisk === "Medium" ? "bg-orange-600" 
+                    : "bg-green-600";
+
+      const finalResult = {
+        riskLevel: finalRisk,
+        riskColor,
+        message: finalRisk === "High"
+          ? "High Risk detected. Hospital has been alerted immediately."
+          : finalRisk === "Medium"
+          ? "Medium Risk. ASHA worker will contact you soon."
+          : "Low risk. Regular check-up is recommended.",
+        hospitalAlert: finalRisk === "High",
+        patientProfile: profile,
+        symptoms: allSymptoms.map(s => s.answer).join(", "),
+      };
+
+      setResult(finalResult);
+
+      if (finalResult.hospitalAlert) {
+        setHospitalAlerts(prev => [...prev, {
+          id: Date.now(),
+          patient: profile,
+          symptoms: allSymptoms.map(s => s.answer).join(", "),
+          riskLevel: finalRisk,
+          priority: "URGENT 🚨",   // 🔥 NEW
+          referredBy: "Patient Self-Assessment",
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }]);
+      }
+
+      setPendingPatients(prev => [...prev, {
         id: Date.now(),
-        patient: profile,
-        symptoms: allSymptoms,
-        riskLevel,
-        referredBy: "Patient Self-Assessment",
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        name: profile.name || "Unknown",
+        age: profile.age,
+        phone: profile.phone,
+        region: profile.region,
+        riskLevel: finalRisk,
+        symptoms: allSymptoms.map(s => s.answer).join(", "),
+        lastUpdated: "Just now"
       }]);
-    }
 
-    setLoading(false);
+    } catch (error) {
+      console.error("Error in finishAssessment:", error);
+      setResult({
+        riskLevel: "Medium",
+        riskColor: "bg-orange-600",
+        message: "Something went wrong during analysis. Please contact your ASHA worker.",
+        hospitalAlert: false,
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const playBackAnswer = (answer) => {

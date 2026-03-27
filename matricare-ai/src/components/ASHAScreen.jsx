@@ -1,11 +1,16 @@
 // components/ASHAScreen.js
 import { useState } from 'react';
 
-function ASHAScreen({ language, setRole, ashaWorker, setSelectedASHA, setHospitalAlerts }) {
+function ASHAScreen({
+  language,
+  setRole,
+  ashaWorker,
+  setSelectedASHA,
+  setHospitalAlerts,
+  pendingPatients,
+  setPendingPatients
+}){
   const [activeTab, setActiveTab] = useState('pending');
-  const [pendingPatients, setPendingPatients] = useState([
-    { id: 101, name: "Priya Sharma", age: 24, region: "Region A", phone: "9876543210", riskLevel: "High", symptoms: "Severe headache, swelling in hands, bleeding", lastUpdated: "10 min ago" }
-  ]);
   const [completedPatients, setCompletedPatients] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newPatient, setNewPatient] = useState({ name: "", age: "", region: "Region A", riskLevel: "Medium", symptoms: "", phone: "" });
@@ -19,6 +24,8 @@ function ASHAScreen({ language, setRole, ashaWorker, setSelectedASHA, setHospita
   const getRiskColor = (risk) => risk === "High" ? "bg-red-600 text-white" : risk === "Medium" ? "bg-orange-600 text-white" : "bg-green-600 text-white";
 
   const filteredPending = pendingPatients.filter(p => p.region === ashaWorker.region);
+
+  console.log("ASHA patients:", pendingPatients);
 
   const markVisitDone = (id) => {
     const patient = pendingPatients.find(p => p.id === id);
